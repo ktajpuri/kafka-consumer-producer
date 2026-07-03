@@ -194,3 +194,56 @@ Went from "worked a bit with SQS, never touched Kafka" to having directly observ
 The honest boundary: all of it on a single-broker local setup with replication factor 1. Replication, multi-broker failover, and the operational reality of running Kafka in production remain unseen. The accurate claim is "I understand the log-vs-queue model and can reason about it in a design conversation" — not "I know Kafka." That's exactly the claim the notification-service design needed backing for.
 
 **Parked for later, deliberately:** Redis+Lua token-bucket mini-demo (two consumers holding a shared QPS line); exactly-once/transactions; multi-topic priority lanes; Flink hands-on. Each is its own tightly-scoped build with its own done-condition — not extensions of this one.
+
+---
+
+## Appendix: Vocabulary — quick refresh
+
+Plain-language definitions, tied back to what the demo showed where possible.
+
+**Broker** — one Kafka server process. It stores partitions on its disk and serves producers and consumers. The demo ran a single broker in Docker; production runs several, and partitions spread across them.
+
+**Cluster** — the set of brokers working together as one Kafka. Clients talk to "the cluster," and it routes them to whichever broker holds the partition they need.
+
+**Topic** — a named stream of messages; the unit you produce to and subscribe to. Think "channel" or "category." The demo had one: `events`. A real notification system might have `notif.transactional` and `notif.marketing`.
+
+**Partition** — one lane of a topic; an independent, ordered tape. A topic is really N partitions side by side. Order is guaranteed *within* a partition only. Partitions are also the unit of parallelism: one partition is owned by exactly one consumer per group at a time, so partition count caps how many consumers in a group can do useful work.
+
+**Message (record)** — one unit of data on the tape: a key, a value, a timestamp. Once written, never modified.
+
+**Key** — the optional label on a message that decides which partition it lands in (Kafka hashes it). Same key → same partition, every time → one key's messages stay in order. The demo keyed by userId; a notification system keys by user_id for exactly this reason.
+
+**Producer** — anything that writes messages to a topic.
+
+**Consumer** — anything that reads messages. A long-running process: read, do work, move on.
+
+**Consumer group** — a named team of consumers that *share* the reading work for one purpose. Within a group, partitions are divided among members and each message is handled once. Different groups are fully independent — each gets the whole stream via its own bookmarks. Groups = number of uses of the data; consumers in a group = how fast one use goes.
+
+**Offset** — a message's position number within a partition (0, 1, 2, ...). Also used to mean "where a group's bookmark is."
+
+**Committed offset** — the bookmark itself: the broker-side record of "group A has processed up to here" per partition. Survives consumer restarts; this is what made replay (move it back) and clean failover (successor resumes right after it) work in the demo.
+
+**Commit** — the act of saving that bookmark. Auto-commit happens every few seconds by default; die before committing and the next owner re-reads a little (at-least-once delivery — hence idempotency guards before side effects).
+
+**Log-end offset** — the position of the newest message in a partition; where the tape currently ends.
+
+**Lag** — log-end offset minus committed offset: how many messages a group hasn't processed yet. The earliest signal that consumers can't keep up with producers. Watched live in experiment 5 (999 → 0).
+
+**Rebalance** — the reshuffle of partition ownership within a group whenever membership changes (a consumer joins, dies, or is deployed). Brief pause, then new assignments. Seen twice in experiment 4.
+
+**Assignor** — the rule used during a rebalance to deal partitions out to members (the demo used round-robin). Important: it sees only member names and partition numbers — it is blind to lag, backlog, and consumer speed, which is why mixing slow and fast consumers in one group is a design smell.
+
+**Retention** — how long messages stay on the tape before Kafka deletes them (a time or size policy — e.g. 24 hours). Consumption never deletes anything; retention does. Replay is possible only within the retention window.
+
+**Replication factor (RF)** — how many copies of each partition exist across brokers. The demo ran RF 1 (no copies — fine locally, data loss on broker death). Production runs RF 3 so a broker can die without losing messages.
+
+**ISR (in-sync replicas)** — the subset of a partition's copies that are fully caught up with the leader copy. With RF 1 it's trivially 1 (the demo's `Isr: 1`); in production, ISR shrinking below target is an early warning of broker trouble.
+
+**Leader (of a partition)** — the one replica that handles all reads/writes for that partition; the others just copy it. If the leader's broker dies, an in-sync follower is promoted.
+
+**KRaft** — modern Kafka's built-in coordination mode (what the demo ran): the cluster manages its own metadata. Replaces the old external ZooKeeper dependency; also why partition-count ceilings are far higher than older guidance suggests.
+
+**Segment** — the actual files on a broker's disk. A partition is stored as a series of append-only segment files plus small index files. No database underneath — this is the whole storage story.
+
+**Dead-letter (DLQ)** — a side topic where messages that repeatedly fail processing get parked so they don't block the lane. Convention, not a built-in feature.
+
