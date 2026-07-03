@@ -1,0 +1,71 @@
+# Minimal Kafka learning harness — single-node KRaft broker + kafka-ui.
+#
+# The whole point of this file is getting the LISTENERS right so that BOTH
+# of these can connect to the same broker:
+#   - kafka-ui, which lives INSIDE the compose network and reaches the broker
+#     by its service name `kafka`.
+#   - your host scripts (producer.js/consumer.js), which reach the broker over
+#     `localhost` from OUTSIDE the compose network.
+#
+# A Kafka broker doesn't just accept a connection — after the first ("bootstrap")
+# connection it hands the client back an ADVERTISED address and tells it to
+# reconnect there. So each caller must be given an advertised address that is
+# valid on ITS OWN network, or the reconnect fails and the client hangs.
+# That is the single most common way this setup breaks. We solve it with two
+# separate broker listeners, each advertising the right name.
+
+services:
+  kafka:
+    image: apache/kafka:3.9.0
+    hostname: kafka
+    container_name: kafka
+    ports:
+      # Only the EXTERNAL (host) listener is published to your machine.
+      # 9092 (internal) and 9093 (controller) stay inside the compose network.
+      - "9094:9094"
+    environment:
+      # ---- KRaft mode (no Zookeeper). One node plays both roles. ----
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # The controller quorum. Single voter, reachable on the CONTROLLER listener.
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+
+      # ---- Three listeners, three jobs ----
+      # PLAINTEXT      (9092): internal broker traffic + kafka-ui, inside the network.
+      # CONTROLLER     (9093): KRaft controller quorum, never touched by clients.
+      # PLAINTEXT_HOST (9094): your host scripts, reached via localhost.
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:9094
+
+      # ---- The advertised addresses — the part that actually matters ----
+      # Internal callers (kafka-ui) get `kafka:9092`, resolvable via the compose
+      # network's DNS. Host callers get `localhost:9094`, resolvable from your Mac.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9094
+
+      # Every listener speaks plaintext (this is a local toy, no TLS/auth).
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      # Brokers talk to each other over the internal listener.
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+      # ---- Single-node housekeeping ----
+      # Internal topics can't replicate beyond 1 node, so force RF=1.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # Default is 3000ms: the broker waits that long before assigning partitions,
+      # to batch joining consumers together. We set 0 so experiment #4 (rebalance)
+      # reacts instantly instead of making you wait 3 seconds each time.
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      # Note: the INTERNAL advertised name — kafka-ui lives in the compose network.
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      DYNAMIC_CONFIG_ENABLED: "true"

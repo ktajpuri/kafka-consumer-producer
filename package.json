@@ -1,0 +1,14 @@
+{
+  "name": "kafka-learning-harness",
+  "version": "1.0.0",
+  "description": "Minimal Kafka harness to observe five behaviors by hand.",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "produce": "node producer.js",
+    "consume": "node consumer.js"
+  },
+  "dependencies": {
+    "kafkajs": "^2.2.4"
+  }
+}
