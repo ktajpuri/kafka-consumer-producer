@@ -47,6 +47,7 @@ async function main() {
     const [meta] = await producer.send({
       topic: 'events',
       messages: [{ key: userId, value: JSON.stringify(payload) }],
+      acks: -1
     });
 
     // Log userId, seq, and the ASSIGNED PARTITION. Watch: the same userId

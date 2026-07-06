@@ -164,6 +164,22 @@ throttle, the consumer races ahead and lag drains back toward 0.
 **Concept:** consumer lag — the gap between the log's end and the group's
 committed offset, and how throughput determines whether it grows or shrinks.
 
+
+### For the run with multiple brokers and replicas
+
+docker compose -f docker-compose.replication.yml up -d
+docker compose -f docker-compose.replication.yml exec kafka-1 /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:9092 \
+  --describe \
+  --topic events
+
+docker compose -f docker-compose.replication.yml stop kafka-2
+
+docker compose -f docker-compose.replication.yml stop kafka-1
+
+docker compose -f docker-compose.replication.yml start kafka-2 kafka-1
+
+docker compose -f docker-compose.replication.yml down -v
 ---
 
 ## Definition of done
